@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Система анализа присутствия</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            display: grid;
+            grid-template-areas:
+                "header header"
+                "controls controls"
+                "video sidebar"
+                "footer footer";
+            grid-template-columns: 3fr 1fr;
+            grid-template-rows: auto auto 1fr auto;
+            height: 100vh;
+            margin: 0;
+            background-color: #f4f7f6;
+            color: #333;
+        }
+        header {
+            grid-area: header;
+            background-color: #ffffff;
+            padding: 1rem 2rem;
+            border-bottom: 1px solid #ddd;
+            font-size: 1.5rem;
+            font-weight: bold;
+        }
+        #controls-panel {
+            grid-area: controls;
+            padding: 1rem 2rem;
+            background-color: #e9ecef;
+            border-bottom: 1px solid #ddd;
+            display: flex;
+            align-items: center;
+            gap: 1rem;
+        }
+        main {
+            grid-area: video;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            padding: 2rem;
+            min-height: 0; /* Fix for flexbox overflow */
+        }
+        aside {
+            grid-area: sidebar;
+            background-color: #ffffff;
+            padding: 2rem;
+            border-left: 1px solid #ddd;
+            display: flex;
+            flex-direction: column;
+            overflow-y: auto;
+        }
+        footer {
+            grid-area: footer;
+            text-align: center;
+            padding: 1rem;
+            font-size: 0.8rem;
+            color: #888;
+            border-top: 1px solid #ddd;
+        }
+        #video-container {
+            border: 2px solid #ccc;
+            border-radius: 8px;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+            background-color: #000;
+            width: 100%;
+            max-width: 960px;
+            position: relative;
+            overflow: hidden;
+        }
+        #video-stream {
+            width: 100%;
+            height: auto;
+            display: block;
+            border-radius: 6px;
+        }
+        #status {
+            margin-top: 1rem;
+            font-style: italic;
+            color: #555;
+        }
+        h2 {
+            border-bottom: 2px solid #007bff;
+            padding-bottom: 0.5rem;
+            margin-top: 0;
+        }
+        .btn {
+            padding: 0.5rem 1rem;
+            border-radius: 5px;
+            border: 1px solid transparent;
+            font-weight: bold;
+            cursor: pointer;
+        }
+        .btn-start { background-color: #28a745; color: white; }
+        .btn-stop { background-color: #dc3545; color: white; }
+        input[type="text"] {
+            padding: 0.5rem;
+            border-radius: 5px;
+            border: 1px solid #ccc;
+        }
+    </style>
+</head>
+<body>
+    <header>Система анализа присутствия (Django + Channels)</header>
+    
+    <div id="controls-panel">
+        <label for="source-input">Источник видео:</label>
+        <input type="text" id="source-input" value="0" placeholder="0 для веб-камеры или путь/URL">
+        <button id="start-btn" class="btn btn-start">Старт</button>
+        <button id="stop-btn" class="btn btn-stop">Стоп</button>
+    </div>
+
+    <main>
+        <div id="video-container">
+            <img id="video-stream" alt="Видеопоток не активен">
+        </div>
+        <p id="status">Готов к запуску.</p>
+    </main>
+
+    <aside>
+        <h2>Рабочие места</h2>
+        <ul id="workplace-list">
+            <!-- Список будет заполнен через JS -->
+        </ul>
+    </aside>
+
+    <footer>
+        ЮУрГУ, Кафедра системного программирования, 2025
+    </footer>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const videoElement = document.getElementById('video-stream');
+            const statusElement = document.getElementById('status');
+            const workplaceListElement = document.getElementById('workplace-list');
+            const sourceInput = document.getElementById('source-input');
+            const startBtn = document.getElementById('start-btn');
+            const stopBtn = document.getElementById('stop-btn');
+            
+            let ws = null;
+
+            function connectWebSocket() {
+                if (ws) {
+                    ws.close();
+                }
+
+                const source = sourceInput.value.trim();
+                if (source === "") {
+                    alert("Пожалуйста, укажите источник видео.");
+                    return;
+                }
+
+                const wsProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+                // Кодируем источник, чтобы передать его как параметр URL
+                const wsUrl = `${wsProtocol}//${window.location.host}/ws/video_feed/?source=${encodeURIComponent(source)}`;
+                
+                statusElement.textContent = "Подключение к серверу...";
+                ws = new WebSocket(wsUrl);
+
+                ws.onopen = function(event) {
+                    console.log("WebSocket: Соединение установлено.");
+                    statusElement.textContent = "Соединение установлено. Ожидание видеопотока...";
+                };
+
+                ws.onmessage = function(event) {
+                    if (typeof event.data === 'string') {
+                        // Обработка текстовых сообщений от сервера (например, JSON)
+                        const data = JSON.parse(event.data);
+                        if (data.type === 'workplace_update') {
+                            console.log("Получен сигнал обновить рабочие места.");
+                            fetchWorkplaces();
+                        } else if (data.type === 'error') {
+                            console.error("Сервер прислал ошибку:", data.message);
+                            statusElement.textContent = `Ошибка на сервере: ${data.message}`;
+                            ws.close();
+                        }
+                    } else {
+                        // Обработка двоичных данных (кадр видео)
+                        const url = URL.createObjectURL(event.data);
+                        videoElement.src = url;
+                        statusElement.textContent = "Видеопоток активен";
+
+                        videoElement.onload = () => {
+                            URL.revokeObjectURL(url);
+                        }
+                    }
+                };
+
+                ws.onclose = function(event) {
+                    console.log("WebSocket: Соединение разорвано.");
+                    statusElement.textContent = "Отключено.";
+                    videoElement.src = "";
+                };
+
+                ws.onerror = function(event) {
+                    console.error("WebSocket: Произошла ошибка.", event);
+                    statusElement.textContent = "Ошибка соединения.";
+                };
+            }
+
+            function stopWebSocket() {
+                if (ws) {
+                    ws.close();
+                    ws = null;
+                }
+            }
+
+            startBtn.addEventListener('click', connectWebSocket);
+            stopBtn.addEventListener('click', stopWebSocket);
+
+            async function fetchWorkplaces() {
+                try {
+                    const response = await fetch('/api/workplaces/');
+                    if (!response.ok) throw new Error('Network response was not ok');
+                    const workplaces = await response.json();
+                    
+                    workplaceListElement.innerHTML = ''; // Очищаем список
+                    if (workplaces.length === 0) {
+                        workplaceListElement.innerHTML = '<li>Нет зарегистрированных мест.</li>';
+                    } else {
+                        workplaces.forEach(wp => {
+                            const li = document.createElement('li');
+                            li.innerHTML = `
+                                <span>${wp.name}</span>
+                                <button class="delete-btn" data-id="${wp.id}">Удалить</button>
+                            `;
+                            workplaceListElement.appendChild(li);
+                        });
+                    }
+                } catch (error) {
+                    console.error('Ошибка при загрузке рабочих мест:', error);
+                    workplaceListElement.innerHTML = '<li>Ошибка загрузки списка.</li>';
+                }
+            }
+
+            workplaceListElement.addEventListener('click', async function(event) {
+                if (event.target && event.target.classList.contains('delete-btn')) {
+                    const wpId = event.target.dataset.id;
+                    if (confirm('Вы уверены, что хотите удалить это рабочее место?')) {
+                        try {
+                            const response = await fetch(`/api/workplaces/${wpId}/`, { method: 'DELETE' });
+                            if (response.ok) {
+                                fetchWorkplaces();
+                            } else {
+                                throw new Error('Ошибка при удалении');
+                            }
+                        } catch (error) {
+                            alert('Не удалось удалить рабочее место.');
+                        }
+                    }
+                }
+            });
+
+            fetchWorkplaces();
+        });
+    </script>
+</body>
+</html>
