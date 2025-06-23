@@ -8,11 +8,11 @@ def index(request):
     """Рендерит главную страницу."""
     return render(request, 'tracker/index.html')
 
-@csrf_exempt # Упрощение для курсовой, в продакшене нужна CSRF-защита
+@csrf_exempt
 def workplace_api(request):
     """API для управления рабочими местами."""
     if request.method == 'GET':
-        workplaces = Workplace.objects.all().values('id', 'name', 'bbox')
+        workplaces = Workplace.objects.all().values('id', 'name', 'bbox', 'is_confirmed')
         return JsonResponse(list(workplaces), safe=False)
         
     if request.method == 'POST':
@@ -20,7 +20,8 @@ def workplace_api(request):
             data = json.loads(request.body)
             new_workplace = Workplace.objects.create(
                 name=data['name'],
-                bbox=data['bbox']
+                bbox=data['bbox'],
+                is_confirmed=False
             )
             return JsonResponse({'status': 'ok', 'id': new_workplace.id}, status=201)
         except (KeyError, json.JSONDecodeError):
@@ -38,6 +39,38 @@ def workplace_detail_api(request, pk):
 
     if request.method == 'DELETE':
         workplace.delete()
-        return HttpResponse(status=204) # No Content
-        
+        return HttpResponse(status=204)
+    
+    return JsonResponse({'error': 'Invalid method'}, status=405)
+
+@csrf_exempt
+def workplace_confirm_api(request, pk):
+    """API для подтверждения рабочего места."""
+    try:
+        workplace = Workplace.objects.get(pk=pk)
+    except Workplace.DoesNotExist:
+        return JsonResponse({'error': 'Not found'}, status=404)
+
+    if request.method == 'POST':
+        workplace.is_confirmed = True
+        workplace.save()
+        return JsonResponse({'status': 'ok'}, status=200)
+    
+    return JsonResponse({'error': 'Invalid method'}, status=405)
+
+@csrf_exempt
+def workplace_report_api(request, pk):
+    """API для получения отчета о занятости рабочего места."""
+    try:
+        workplace = Workplace.objects.get(pk=pk)
+    except Workplace.DoesNotExist:
+        return JsonResponse({'error': 'Not found'}, status=404)
+
+    if request.method == 'GET':
+        return JsonResponse({
+            'id': str(workplace.id),
+            'name': workplace.name,
+            'times': workplace.times
+        })
+    
     return JsonResponse({'error': 'Invalid method'}, status=405)
